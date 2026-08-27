@@ -1,0 +1,30 @@
+# Goa session/cache state
+.goa/
+
+# Build artifacts
+bin/
+dist/
+*.test
+*.out
+cover.out
+testdata/fixture-server/fixture-server
+
+# OS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Test and coverage artifacts
+coverage.out
+coverage.html
+*.prof
+
+# Local binaries and logs
+/agent-mcp
+*.log
+
+# Local runtime state
+.agent-mcp/

@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package agentmcp.v1;
+
+option go_package = "github.com/pijalu/agent-mcp/proto/agentmcp/v1;agentmcpv1";
+
+// AgentMCP is the daemon-facing service. MCP params and results travel as raw
+// JSON bytes so the daemon is not version-locked against MCP schema revisions.
+service AgentMCP {
+  // ListServers returns the servers known to the daemon (configured + active).
+  rpc ListServers(ListServersRequest) returns (ListServersResponse);
+  // ListTools lists tools exposed by one server. Request JSON carries cursor.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  // CallTool invokes a tool. Request JSON carries name + arguments.
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+  // ListResources lists resources exposed by one server.
+  rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
+  // ReadResource reads one resource by URI.
+  rpc ReadResource(ReadResourceRequest) returns (ReadResourceResponse);
+  // ListPrompts lists prompts exposed by one server.
+  rpc ListPrompts(ListPromptsRequest) returns (ListPromptsResponse);
+  // GetPrompt gets a prompt template with arguments applied.
+  rpc GetPrompt(GetPromptRequest) returns (GetPromptResponse);
+  // Status reports daemon and per-server health.
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // ShutdownAll closes every MCP session, then stops the daemon.
+  // Last RPC a daemon serves before exiting.
+  rpc ShutdownAll(ShutdownAllRequest) returns (ShutdownAllResponse);
+  // Subscribe streams progress and server notification events.
+  rpc Subscribe(SubscribeRequest) returns (stream SessionEvent);
+}
+
+// ListServers
+message ListServersRequest {
+  bytes json = 1;
+}
+
+message ListServersResponse {
+  bytes json = 1;
+}
+
+// ListTools
+message ListToolsRequest {
+  string server = 1;
+  bytes json = 2;
+}
+
+message ListToolsResponse {
+  bytes json = 1;
+}
+
+// CallTool
+message CallToolRequest {
+  string server = 1;
+  bytes json = 2;
+}
+
+message CallToolResponse {
+  bytes json = 1;
+}
+
+// ListResources
+message ListResourcesRequest {
+  string server = 1;
+  bytes json = 2;
+}
+
+message ListResourcesResponse {
+  bytes json = 1;
+}
+
+// ReadResource
+message ReadResourceRequest {
+  string server = 1;
+  bytes json = 2;
+}
+
+message ReadResourceResponse {
+  bytes json = 1;
+}
+
+// ListPrompts
+message ListPromptsRequest {
+  string server = 1;
+  bytes json = 2;
+}
+
+message ListPromptsResponse {
+  bytes json = 1;
+}
+
+// GetPrompt
+message GetPromptRequest {
+  string server = 1;
+  bytes json = 2;
+}
+
+message GetPromptResponse {
+  bytes json = 1;
+}
+
+// Status
+message StatusRequest {
+  bytes json = 1;
+}
+
+message ServerStatus {
+  string name = 1;
+  string state = 2; // "starting" | "ready" | "degraded" | "stopped" | "failed"
+  int32 active_sessions = 3;
+  string last_error = 4;
+  bytes json = 5; // server-specific detail
+}
+
+message StatusResponse {
+  int64 uptime_seconds = 1;
+  int32 active_sessions = 2;
+  repeated ServerStatus servers = 3;
+  // config_path is the absolute config file the daemon loaded. Clients use it
+  // to detect that --config names a different config than the daemon serves.
+  string config_path = 4;
+}
+
+// ShutdownAll
+message ShutdownAllRequest {
+  bytes json = 1; // e.g. {"grace_seconds": 5}
+}
+
+message ShutdownAllResponse {
+  int32 sessions_closed = 1;
+}
+
+message SubscribeRequest {
+  string server = 1; // empty subscribes to all servers
+}
+
+message SessionEvent {
+  string server = 1;
+  string type = 2; // progress | logging | tools_changed | resources_changed | prompts_changed
+  bytes json = 3; // notification payload
+}
