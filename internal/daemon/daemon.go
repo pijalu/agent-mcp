@@ -60,6 +60,24 @@ type Options struct {
 // DefaultShutdownGrace applies when Options.ShutdownGrace is zero.
 const DefaultShutdownGrace = 10 * time.Second
 
+// MaxMessageBytes bounds a single daemon RPC message in both directions.
+// gRPC's 4 MiB default is far below what MCP servers return in practice:
+// Blender screenshots, base64 renders, mesh dumps and documentation reads all
+// exceed it, and the failure mode is a bare ResourceExhausted at the RPC layer
+// rather than an actionable MCP error. 64 MiB leaves room for those payloads
+// while still bounding per-message memory.
+const MaxMessageBytes = 64 << 20
+
+// ClientCallOptions returns the gRPC call options a daemon client must use so
+// payloads above gRPC's default limit survive the hop. Dialers must apply
+// these via grpc.WithDefaultCallOptions; see grpcDial in internal/cli.
+func ClientCallOptions() []grpc.CallOption {
+	return []grpc.CallOption{
+		grpc.MaxCallRecvMsgSize(MaxMessageBytes),
+		grpc.MaxCallSendMsgSize(MaxMessageBytes),
+	}
+}
+
 // MetadataHeader is the gRPC metadata key clients send their API key in.
 const MetadataHeader = "x-agent-mcp-api-key"
 
@@ -110,7 +128,11 @@ func New(mgr SessionManager, opts Options) *Daemon {
 	for _, k := range opts.APIKeys {
 		d.keys = append(d.keys, []byte(k))
 	}
-	d.server = grpc.NewServer(grpc.UnaryInterceptor(d.interceptor))
+	d.server = grpc.NewServer(
+		grpc.UnaryInterceptor(d.interceptor),
+		grpc.MaxRecvMsgSize(MaxMessageBytes),
+		grpc.MaxSendMsgSize(MaxMessageBytes),
+	)
 	pb.RegisterAgentMCPServer(d.server, d)
 	return d
 }

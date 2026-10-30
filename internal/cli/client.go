@@ -43,9 +43,14 @@ type ClosableManager interface {
 	CloseAll() int
 }
 
-// grpcDial dials addr and returns the client plus the connection.
+// grpcDial dials addr and returns the client plus the connection. The call
+// options raise gRPC's 4 MiB message ceiling to daemon.MaxMessageBytes so
+// large MCP results (screenshots, docs, renders) reach the caller intact.
 func grpcDial(_ context.Context, addr string) (pb.AgentMCPClient, io.Closer, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(daemon.ClientCallOptions()...),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cli: dial %s: %v", addr, err)
 	}

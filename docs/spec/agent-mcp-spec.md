@@ -104,7 +104,7 @@ The CLI supports the complete MCP protocol via CLI parameters. To ensure perform
 
 - Runs and maintains MCP server connections locally. Auto-started on first client interaction.
 - Keeps MCP servers running while idle; shuts down after `--server-idle-time` (default `5m`) with no active client connections.
-- Communicates with `agent-mcp` clients via protobuf on a configurable host/port (`--listen host:port`).
+- Communicates with `agent-mcp` clients via protobuf on a configurable host/port (`--listen host:port`). Individual RPC messages are bounded at 64 MiB in both directions (`daemon.MaxMessageBytes`) because MCP results routinely exceed gRPC's 4 MiB default: screenshots, renders, mesh dumps, and documentation reads. A payload past the bound fails with `ResourceExhausted` instead of being truncated.
 - Supports an optional list of API keys to authenticate clients (`--api-key`, repeatable, or `api_keys` in config).
 - Can be started manually via `agent-mcp server start`; when started manually the idle timeout is disabled unless explicitly passed.
 
