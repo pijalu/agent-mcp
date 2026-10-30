@@ -251,6 +251,35 @@ AGENT_MCP_CHROME_E2E=1 go test ./internal/cli -run TestChromeDevToolsGoogle -v
 
 Normal test runs skip this test because it requires Chrome, Node.js, network access, and `npx`.
 
+## Blender automation
+
+The repository includes a reusable skill at [`.agents/skills/blender/SKILL.md`](.agents/skills/blender/SKILL.md) for driving Blender through [`blender-mcp`](https://projects.blender.org/lab/blender_mcp). Prerequisites: Blender on `PATH` (or `BLENDER_PATH`), `uv`, and a `blender-mcp` checkout.
+
+Register the server with the CLI:
+
+```sh
+agent-mcp config add --name blender --command uv \
+    --arg --directory --arg /path/to/blender_mcp/mcp --arg run --arg blender-mcp
+```
+
+or add the equivalent TOML entry by hand:
+
+```toml
+[mcpServers.blender]
+command = "uv"
+args = ["--directory", "/path/to/blender_mcp/mcp", "run", "blender-mcp"]
+```
+
+The `*_for_cli` tools need no Blender GUI: they run `blender --background <blend_file>`. Building a scene and rendering a still is one such call:
+
+```sh
+agent-mcp call-tool --server blender --tool execute_blender_code_for_cli \
+    --args '{"blend_file":"/tmp/project/scene.blend","code":"import bpy\nresult = {\"ok\": True}"}' \
+    --call-timeout 180s
+```
+
+The interactive tools (no `_for_cli` suffix) require Blender running with the MCP add-on, which listens on `localhost:9876`.
+
 ## Architecture
 
 - `cmd/agent-mcp` — executable entry point
