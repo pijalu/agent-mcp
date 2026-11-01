@@ -1,11 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"strings"
 
+	"github.com/pijalu/agent-mcp/client"
 	"github.com/pijalu/agent-mcp/internal/config"
 	"github.com/pijalu/agent-mcp/internal/output"
 )
@@ -34,13 +35,6 @@ func runConfig(args []string, stdout io.Writer) (int, error) {
 	}
 }
 
-// configAddResult is the JSON payload for config add.
-type configAddResult struct {
-	Name   string `json:"name"`
-	Action string `json:"action"` // added or updated
-	Path   string `json:"path"`
-}
-
 // configAdd upserts one MCP server entry in the config file.
 func configAdd(args []string, stdout io.Writer) (int, error) {
 	fs := newFlagSet("config add")
@@ -59,20 +53,14 @@ func configAdd(args []string, stdout io.Writer) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	path := config.ResolvePath(g.config)
-	cfg, err := config.LoadOrEmpty(path)
+	result, err := client.UpsertServer(g.config, p.name, srv)
 	if err != nil {
-		return 2, fmt.Errorf("%w: %v", output.ErrUsage, err)
+		if errors.Is(err, client.ErrUsage) {
+			return 2, err
+		}
+		return 3, err
 	}
-	action := "added"
-	if _, ok := cfg.MCPServers[p.name]; ok {
-		action = "updated"
-	}
-	cfg.MCPServers[p.name] = srv
-	if err := config.Save(path, cfg); err != nil {
-		return 3, fmt.Errorf("%w: %v", output.ErrInternal, err)
-	}
-	return 0, writeResult(stdout, format, configAddResult{Name: p.name, Action: action, Path: path})
+	return 0, writeResult(stdout, format, result)
 }
 
 // bindConfigAdd registers config add flags.

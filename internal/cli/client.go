@@ -2,21 +2,16 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/pijalu/agent-mcp/client"
 	"github.com/pijalu/agent-mcp/internal/config"
 	"github.com/pijalu/agent-mcp/internal/daemon"
 	"github.com/pijalu/agent-mcp/internal/output"
@@ -26,13 +21,13 @@ import (
 
 // defaultConnectTimeout is the single source for the connect/readiness
 // timeout: the --connect-timeout default and the runtime lookup both use it.
-const defaultConnectTimeout = 5 * time.Second
+const defaultConnectTimeout = client.DefaultConnectTimeout
 
 // defaultConnectAddr is where the daemon listens when --connect is unset.
-const defaultConnectAddr = "127.0.0.1:7474"
+const defaultConnectAddr = client.DefaultConnectAddr
 
 // DialFunc probes or opens a daemon connection; faked in tests.
-type DialFunc func(ctx context.Context, addr string) (pb.AgentMCPClient, io.Closer, error)
+type DialFunc = client.ProbeDial
 
 // ManagerFactory builds a one-shot session manager; faked in tests.
 type ManagerFactory func(cfg *config.Config) ClosableManager
@@ -46,15 +41,8 @@ type ClosableManager interface {
 // grpcDial dials addr and returns the client plus the connection. The call
 // options raise gRPC's 4 MiB message ceiling to daemon.MaxMessageBytes so
 // large MCP results (screenshots, docs, renders) reach the caller intact.
-func grpcDial(_ context.Context, addr string) (pb.AgentMCPClient, io.Closer, error) {
-	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(daemon.ClientCallOptions()...),
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("cli: dial %s: %v", addr, err)
-	}
-	return pb.NewAgentMCPClient(conn), conn, nil
+func grpcDial(ctx context.Context, addr string) (pb.AgentMCPClient, io.Closer, error) {
+	return client.GRPCDial(ctx, addr)
 }
 
 // newSessionManager builds a session.Manager from the loaded config.
@@ -67,7 +55,7 @@ func (env *clientEnv) connectAddr() string {
 	if env.global.connect != "" {
 		return env.global.connect
 	}
-	return defaultConnectAddr
+	return client.DefaultConnectAddr
 }
 
 func (env *clientEnv) connectTimeoutValue() time.Duration {
@@ -82,12 +70,7 @@ func (env *clientEnv) connectTimeoutValue() time.Duration {
 // this way, so a relative --config compares equal to the daemon's absolute
 // path and an unresolvable path still yields a diagnosable value.
 func resolvedConfigPath(g GlobalFlags) string {
-	path := config.ResolvePath(g.config)
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	return abs
+	return client.ResolveConfigPath(g.config)
 }
 
 // checkConfigMatch rejects a daemon that serves a different config file than
@@ -95,17 +78,7 @@ func resolvedConfigPath(g GlobalFlags) string {
 // receives another config's servers. Daemons that predate the ConfigPath field
 // report nothing, so they are trusted.
 func (env *clientEnv) checkConfigMatch(st *pb.StatusResponse) error {
-	served := st.GetConfigPath()
-	if served == "" {
-		return nil
-	}
-	requested := resolvedConfigPath(env.global)
-	if served == requested {
-		return nil
-	}
-	return fmt.Errorf("%w: config mismatch: daemon at %s serves %s but this client uses %s; "+
-		"restart the daemon with that --config or point --connect at a matching daemon",
-		output.ErrMCP, env.connectAddr(), served, requested)
+	return client.CheckConfigMatch(st, env.connectAddr(), resolvedConfigPath(env.global))
 }
 
 // callCtx derives the per-call context with timeout and API key metadata.
@@ -124,15 +97,18 @@ func (env *clientEnv) probeCtx() (context.Context, context.CancelFunc) {
 func (env *clientEnv) metadataCtx(timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	if env.global.apiKey != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, daemon.MetadataHeader, env.global.apiKey)
+		ctx = metadata.AppendToOutgoingContext(ctx, daemonMetadataHeader, env.global.apiKey)
 	}
 	return ctx, cancel
 }
 
+// daemonMetadataHeader is the daemon's API-key metadata key.
+const daemonMetadataHeader = "x-agent-mcp-api-key"
+
 // runDaemonBacked connects to the daemon (auto-starting on failure) and
 // executes the command over gRPC.
 func (env *clientEnv) runDaemonBacked(stdout io.Writer) (int, error) {
-	client, closer, err := env.connectDaemon()
+	clientConn, closer, err := env.connectDaemon()
 	if err != nil {
 		return 1, err
 	}
@@ -140,9 +116,9 @@ func (env *clientEnv) runDaemonBacked(stdout io.Writer) (int, error) {
 	ctx, cancel := env.callCtx()
 	defer cancel()
 	if env.name == "events" {
-		return 0, env.runEvents(ctx, client, stdout)
+		return 0, env.runEvents(ctx, clientConn, stdout)
 	}
-	result, err := env.invokeDaemon(ctx, client)
+	result, err := env.invokeDaemon(ctx, clientConn)
 	if err == nil {
 		result, err = env.prepare(result)
 	}
@@ -162,9 +138,9 @@ var errDaemonUnauthenticated = errors.New("daemon rejected the API key")
 // daemon nobody asked for, and an unreachable daemon is reported as such.
 func (env *clientEnv) connectDaemon() (pb.AgentMCPClient, io.Closer, error) {
 	addr := env.connectAddr()
-	client, closer, st, err := env.probeDaemon(addr)
+	clientConn, closer, st, err := env.probeDaemon(addr)
 	if err == nil {
-		return client, closer, env.checkConfigMatch(st)
+		return clientConn, closer, env.checkConfigMatch(st)
 	}
 	// A running daemon that rejects the key must not be treated as
 	// absent: auto-starting would spawn a duplicate and hide the cause.
@@ -186,11 +162,11 @@ func (env *clientEnv) connectDaemon() (pb.AgentMCPClient, io.Closer, error) {
 	}
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), env.connectTimeoutValue())
 	defer dialCancel()
-	client, closer, err = env.deps.Dial(dialCtx, addr)
+	clientConn, closer, err = env.deps.Dial(dialCtx, addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: dial daemon at %s: %v", output.ErrMCP, addr, err)
 	}
-	return client, closer, nil
+	return clientConn, closer, nil
 }
 
 // autoStartNotice is the stderr hint printed when a discovery command has to
@@ -199,7 +175,7 @@ func (env *clientEnv) connectDaemon() (pb.AgentMCPClient, io.Closer, error) {
 // discovery commands leave MCP child processes (Chrome and friends) alive, so
 // the reminder is the only pointer to the teardown command.
 func autoStartNotice(addr string) string {
-	return fmt.Sprintf("daemon not reachable at %s; auto-starting one (it stays up after this command; stop it with `agent-mcp server shutdown`)\n", addr)
+	return client.AutoStartNotice(addr)
 }
 
 // probeDaemon dials addr and asks the daemon behind it for its status. A
@@ -208,13 +184,13 @@ func autoStartNotice(addr string) string {
 func (env *clientEnv) probeDaemon(addr string) (pb.AgentMCPClient, io.Closer, *pb.StatusResponse, error) {
 	dialCtx, cancel := context.WithTimeout(context.Background(), env.connectTimeoutValue())
 	defer cancel()
-	client, closer, err := env.deps.Dial(dialCtx, addr)
+	clientConn, closer, err := env.deps.Dial(dialCtx, addr)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial %s: %v", addr, err)
 	}
-	st, err := env.reachable(client)
+	st, err := env.reachable(clientConn)
 	if err == nil {
-		return client, closer, st, nil
+		return clientConn, closer, st, nil
 	}
 	if closer != nil {
 		_ = closer.Close()
@@ -229,61 +205,23 @@ func (env *clientEnv) probeDaemon(addr string) (pb.AgentMCPClient, io.Closer, *p
 // (`code: desc = "..."`) down to the cause, so an unreachable address stays
 // diagnosable without a gRPC status dump in the envelope.
 func transportReason(err error) string {
-	msg := status.Convert(err).Message()
-	if _, rest, ok := strings.Cut(msg, `desc = "`); ok {
-		msg = strings.TrimSuffix(rest, `"`)
-	}
-	return strings.TrimPrefix(msg, "transport: Error while dialing: ")
+	return client.TransportReason(err)
 }
 
 // reachable returns the daemon Status when the RPC succeeds. The probe
 // carries API-key metadata, so auth failures are distinguishable from a
 // daemon that is not listening.
-func (env *clientEnv) reachable(client pb.AgentMCPClient) (*pb.StatusResponse, error) {
+func (env *clientEnv) reachable(clientConn pb.AgentMCPClient) (*pb.StatusResponse, error) {
 	ctx, cancel := env.probeCtx()
 	defer cancel()
-	return client.Status(ctx, &pb.StatusRequest{})
-}
-
-// probe reports nil when the daemon at addr accepts a TCP connection.
-func (env *clientEnv) probe(addr string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), env.connectTimeoutValue())
-	defer cancel()
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
+	return clientConn.Status(ctx, &pb.StatusRequest{})
 }
 
 // waitReady polls addr until the daemon accepts connections or the connect
 // timeout expires. A child that exits first fails fast with its own error and
 // exit code instead of stalling until the timeout.
 func (env *clientEnv) waitReady(addr string, child DaemonChild) error {
-	timeout := env.connectTimeoutValue()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if env.probe(addr) == nil {
-			return nil
-		}
-		if code, exited := childStatus(child); exited {
-			return daemonStartupError(addr, code, child.Output())
-		}
-		time.Sleep(readinessPollInterval)
-	}
-	if code, exited := childStatus(child); exited {
-		return daemonStartupError(addr, code, child.Output())
-	}
-	return fmt.Errorf("%w: daemon at %s not ready within %s", output.ErrMCP, addr, timeout)
-}
-
-// childStatus reports the child's exit code when the child has already exited.
-func childStatus(child DaemonChild) (int, bool) {
-	if child == nil {
-		return 0, false
-	}
-	return child.Exited()
+	return client.WaitReady(addr, child, env.connectTimeoutValue())
 }
 
 // daemonStartupError reports an auto-started daemon that exited during startup.
@@ -291,58 +229,17 @@ func childStatus(child DaemonChild) (int, bool) {
 // error kind, so a config-load failure surfaces as the config error with exit
 // 2 rather than an opaque readiness timeout.
 func daemonStartupError(addr string, code int, childOut string) error {
-	kind := output.ErrMCP
-	switch code {
-	case 2:
-		kind = output.ErrUsage
-	case 3:
-		kind = output.ErrInternal
-	}
-	return fmt.Errorf("%w: auto-started daemon at %s exited with code %d during startup: %s",
-		kind, addr, code, childDetail(childOut))
+	return client.DaemonStartupError(addr, code, childOut)
 }
 
 // maxChildDetail caps how much of a child's output is echoed back.
-const maxChildDetail = 2000
+const maxChildDetail = client.MaxChildDetail
 
 // childDetail turns captured child output into a one-line diagnostic: the
 // message of its JSON error envelope is unwrapped so the agent sees the cause
 // without a nested envelope inside the envelope.
 func childDetail(raw string) string {
-	parts := make([]string, 0, 2)
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if msg := envelopeMessage(line); msg != "" {
-			parts = append(parts, msg)
-			continue
-		}
-		parts = append(parts, line)
-	}
-	if len(parts) == 0 {
-		return "(no output)"
-	}
-	detail := strings.Join(parts, "; ")
-	if len(detail) > maxChildDetail {
-		detail = detail[:maxChildDetail] + "..."
-	}
-	return detail
-}
-
-// envelopeMessage returns the error message of a JSON error envelope, or ""
-// when line is not one.
-func envelopeMessage(line string) string {
-	var env struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(line), &env); err != nil {
-		return ""
-	}
-	return env.Error.Message
+	return client.ChildDetail(raw)
 }
 
 // runOneShot executes the command directly against a session.Manager and
