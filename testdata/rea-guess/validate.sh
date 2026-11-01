@@ -22,15 +22,15 @@ if [ -z "$binary" ]; then
 	clang -O2 -g0 -o "$binary" "$here/guess.c"
 fi
 
-config_flag=()
+config_args=()
 if [ -n "${AGENT_MCP_CONFIG:-}" ]; then
-	config_flag=(--config "$AGENT_MCP_CONFIG")
+	config_args=(--config "$AGENT_MCP_CONFIG")
 fi
 
 # Extract the canonical record REA returns inside the agent-mcp envelope.
 rea() {
 	local tool="$1" args="$2"
-	agent-mcp call-tool "${config_flag[@]}" --server rea --tool "$tool" \
+	agent-mcp call-tool ${config_args[@]+"${config_args[@]}"} --server rea --tool "$tool" \
 		--args "$args" --call-timeout "$call_timeout" |
 		jq -r '.data.content[0].text' | jq -c '.'
 }
