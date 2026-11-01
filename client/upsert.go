@@ -5,9 +5,14 @@
 package client
 
 import (
+	"context"
 	"fmt"
+	"io"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pijalu/agent-mcp/internal/config"
+	"github.com/pijalu/agent-mcp/internal/session"
 )
 
 // UpsertResult is the payload for a config add: the server name, whether it
@@ -39,4 +44,69 @@ func UpsertServer(path, name string, srv config.ServerConfig) (UpsertResult, err
 		return UpsertResult{}, fmt.Errorf("%w: %v", ErrInternal, err)
 	}
 	return UpsertResult{Name: name, Action: action, Path: resolved}, nil
+}
+
+// ServerEntry is the external-facing shape of one MCP server configuration.
+// It exists because the daemon's config types are internal to this module;
+// embedders (goa) build ServerEntry values and UpsertServerEntry converts.
+type ServerEntry struct {
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+}
+
+// UpsertServerEntry inserts or replaces one MCP server entry from the
+// external-facing shape; see UpsertServer.
+func UpsertServerEntry(path, name string, e ServerEntry) (UpsertResult, error) {
+	return UpsertServer(path, name, config.ServerConfig{
+		Command:   e.Command,
+		Args:      e.Args,
+		Env:       e.Env,
+		URL:       e.URL,
+		Transport: e.Transport,
+		Headers:   e.Headers,
+	})
+}
+
+// DialSession opens one client session for a configured server; the
+// external-facing form of the session package's dial hook.
+type DialSessionFunc func(ctx context.Context, name string, cfg ServerEntry) (*mcp.ClientSession, error)
+
+// NewSessionManager builds an in-process manager over named servers with an
+// optional custom dial hook — the NoServer backend for embedders that bring
+// their own transport. A nil dial uses the config's stdio/HTTP transports.
+func NewSessionManager(servers map[string]ServerEntry, dial DialSessionFunc) (ClosableManager, error) {
+	internal := make(map[string]config.ServerConfig, len(servers))
+	for name, e := range servers {
+		internal[name] = config.ServerConfig{
+			Command: e.Command, Args: e.Args, Env: e.Env,
+			URL: e.URL, Transport: e.Transport, Headers: e.Headers,
+		}
+	}
+	var d session.DialFunc
+	if dial != nil {
+		d = func(ctx context.Context, name string, cfg config.ServerConfig) (*mcp.ClientSession, error) {
+			return dial(ctx, name, ServerEntry{
+				Command: cfg.Command, Args: cfg.Args, Env: cfg.Env,
+				URL: cfg.URL, Transport: cfg.Transport, Headers: cfg.Headers,
+			})
+		}
+	}
+	return session.NewManager(internal, d), nil
+}
+
+// NewWithManager returns a NoServer Client bound to a ready backend (e.g.
+// NewSessionManager output), skipping config loading — the embedder path
+// when the manager is built by hand. Close tears the manager's sessions
+// down.
+func NewWithManager(mgr ClosableManager) *Client {
+	c := &Client{opts: Options{NoServer: true, Stderr: io.Discard}}
+	c.opts.SpawnDaemon = SpawnDaemon
+	c.opts.Dial = GRPCDial
+	c.opts.NewManager = func(*config.Config) (ClosableManager, error) { return mgr, nil }
+	c.mgr = mgr
+	return c
 }
