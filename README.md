@@ -280,6 +280,50 @@ agent-mcp call-tool --server blender --tool execute_blender_code_for_cli \
 
 The interactive tools (no `_for_cli` suffix) require Blender running with the MCP add-on, which listens on `localhost:9876`.
 
+## REA reverse engineering
+
+The repository includes a reusable skill at [`.agents/skills/rea/SKILL.md`](.agents/skills/rea/SKILL.md) for driving [REA](https://rea.tools/) (`rea-agents`) through agent-mcp. Prerequisites: Node.js with `npx`; deep native analysis additionally needs a caller-supplied Ghidra, Hopper, IDA, or Kuna provider.
+
+Register the server with bounded schema profiles — REA advertises 229 tools, and complete output schemas make one unbounded `list-tools` cost 3.5 MB instead of 302 KB:
+
+```sh
+agent-mcp config add --name rea --command npx \
+    --arg -y --arg rea-agents@latest --arg mcp \
+    --env REA_MCP_INPUT_SCHEMA_PROFILE=compact \
+    --env REA_MCP_OUTPUT_SCHEMA_PROFILE=off
+```
+
+Provider variables belong in the server's `env` block, because the MCP child reads them rather than the calling shell. Each provider has its own required layout and version gate; the verified details — including why a Homebrew Ghidra root is its `libexec` directory and which Ghidra releases ship a macOS native decompiler — are in [`.agents/skills/rea/references/providers.md`](.agents/skills/rea/references/providers.md):
+
+```sh
+agent-mcp config add --name rea --command npx \
+    --arg -y --arg rea-agents@latest --arg mcp \
+    --env GHIDRA_INSTALL_DIR=/opt/homebrew/Cellar/ghidra/12.2/libexec
+```
+
+Diagnose a refusal with the provider gate list rather than guessing:
+
+```sh
+agent-mcp call-tool --server rea --tool binary_session --args '{}' \
+    | jq '.data.content[0].text | fromjson | .result.analysis_provider_candidates[].availability'
+```
+
+Discover narrowly, then call:
+
+```sh
+agent-mcp list-tools --server rea --search inspect_go --limit 3
+agent-mcp call-tool --server rea --tool inspect_go_binary \
+    --args '{"path":"/abs/path/binary","detail":"summary"}'
+```
+
+Large results are retained: page them with `inspect_analysis_view` (`{"source":{"kind":"retained-evidence","evidence_id":"..."},"view":{"kind":"summary"}}`) inside the same daemon lifetime, or export a bundle. Use `--call-timeout 890s` for cold provider imports.
+
+```sh
+agent-mcp server shutdown
+```
+
+The skill is validated end to end against a compiled target: [`testdata/rea-guess`](testdata/rea-guess/README.md) records a from-the-binary workflow (string search → xrefs → containing procedure → decompilation) that recovers a hard-coded comparison constant through REA and Ghidra.
+
 ## Architecture
 
 - `cmd/agent-mcp` — executable entry point
