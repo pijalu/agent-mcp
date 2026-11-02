@@ -79,7 +79,7 @@ func fixtureDialer(t *testing.T) func(context.Context, string, config.ServerConf
 }
 
 // noServerClient builds a NoServer Client wired to the in-memory fixture:
-// the manager hook bypasses the config so no real servers are spawned.
+// the manager hook keeps the fixture config from spawning real servers.
 func noServerClient(t *testing.T) *Client {
 	t.Helper()
 	return fixtureClient(t, func(cfg *config.Config) (ClosableManager, error) {
@@ -90,7 +90,11 @@ func noServerClient(t *testing.T) *Client {
 // fixtureClient builds a NoServer Client around a custom manager factory.
 func fixtureClient(t *testing.T, factory func(*config.Config) (ClosableManager, error)) *Client {
 	t.Helper()
-	c, err := New(Options{NoServer: true, NewManager: factory})
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[mcpServers.alpha]\ncommand = \"alpha-cmd\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{NoServer: true, ConfigPath: path, NewManager: factory})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -276,17 +280,10 @@ func TestClientNoServerBadConfigFailsAtNew(t *testing.T) {
 
 func TestClientWarmSessionsReusedAcrossDo(t *testing.T) {
 	var opens int
-	c, err := New(Options{
-		NoServer: true,
-		NewManager: func(cfg *config.Config) (ClosableManager, error) {
-			opens++
-			return sessionManagerForFixture(t), nil
-		},
+	c := fixtureClient(t, func(cfg *config.Config) (ClosableManager, error) {
+		opens++
+		return sessionManagerForFixture(t), nil
 	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.Close()
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		if _, err := c.Do(ctx, Request{Op: OpListTools, Server: "alpha"}); err != nil {
