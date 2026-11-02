@@ -93,20 +93,7 @@ func InvokeDaemon(ctx context.Context, cl pb.AgentMCPClient, r Request) (any, er
 		resp, err := cl.ListTools(ctx, &pb.ListToolsRequest{Server: r.Server, Json: raw})
 		return DecodeRaw(resp.GetJson(), err)
 	case OpCallTool:
-		params, err := toolParams(r)
-		if err != nil {
-			return nil, err
-		}
-		raw, err := json.Marshal(params)
-		if err != nil {
-			return nil, fmt.Errorf("%w: encode params: %v", ErrInternal, err)
-		}
-		resp, err := cl.CallTool(ctx, &pb.CallToolRequest{Server: r.Server, Json: raw})
-		value, err := DecodeRaw(resp.GetJson(), err)
-		if err != nil {
-			return nil, err
-		}
-		return value, ToolErrorResult(value)
+		return invokeDaemonCallTool(ctx, cl, r)
 	case OpListResources:
 		raw, err := r.cursorParams()
 		if err != nil {
@@ -129,18 +116,39 @@ func InvokeDaemon(ctx context.Context, cl pb.AgentMCPClient, r Request) (any, er
 		resp, err := cl.ListPrompts(ctx, &pb.ListPromptsRequest{Server: r.Server, Json: raw})
 		return DecodeRaw(resp.GetJson(), err)
 	case OpGetPrompt:
-		args, err := argsMap(r)
-		if err != nil {
-			return nil, err
-		}
-		raw, err := json.Marshal(&mcp.GetPromptParams{Name: r.Prompt, Arguments: args})
-		if err != nil {
-			return nil, fmt.Errorf("%w: encode params: %v", ErrInternal, err)
-		}
-		resp, err := cl.GetPrompt(ctx, &pb.GetPromptRequest{Server: r.Server, Json: raw})
-		return DecodeRaw(resp.GetJson(), err)
+		return invokeDaemonGetPrompt(ctx, cl, r)
 	}
 	return nil, fmt.Errorf("%w: unknown command %q", ErrInternal, r.Op)
+}
+
+func invokeDaemonCallTool(ctx context.Context, cl pb.AgentMCPClient, r Request) (any, error) {
+	params, err := toolParams(r)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode params: %v", ErrInternal, err)
+	}
+	resp, err := cl.CallTool(ctx, &pb.CallToolRequest{Server: r.Server, Json: raw})
+	value, err := DecodeRaw(resp.GetJson(), err)
+	if err != nil {
+		return nil, err
+	}
+	return value, ToolErrorResult(value)
+}
+
+func invokeDaemonGetPrompt(ctx context.Context, cl pb.AgentMCPClient, r Request) (any, error) {
+	args, err := argsMap(r)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(&mcp.GetPromptParams{Name: r.Prompt, Arguments: args})
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode params: %v", ErrInternal, err)
+	}
+	resp, err := cl.GetPrompt(ctx, &pb.GetPromptRequest{Server: r.Server, Json: raw})
+	return DecodeRaw(resp.GetJson(), err)
 }
 
 // DecodeRaw unwraps an RPC: err non-nil maps to a client failure, otherwise
