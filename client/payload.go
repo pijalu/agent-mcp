@@ -7,6 +7,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 )
 
 // metadataKeys are MCP transport bookkeeping fields: protocol version markers,
@@ -15,9 +16,11 @@ import (
 var metadataKeys = []string{"_meta", "resultType", "cacheScope", "ttlMs"}
 
 // Shape reduces a raw MCP result to the default payload a caller writes out:
-// discovery lists carry their filtered items plus a match total, and MCP
-// transport metadata is stripped everywhere. Raw requests skip both reductions
-// and receive the result as the server returned it.
+// discovery lists carry their filtered items plus a match total, MCP
+// transport metadata is stripped everywhere, and call-tool results drop a
+// content array that only mirrors structuredContent (one payload, one copy).
+// Raw requests keep the server's result but receive the same single
+// representation: a mirrored copy is protocol back-compat, not data.
 func Shape(result any, r Request) (any, error) {
 	filtered, err := FilterDiscovery(result, DiscoveryFilter{
 		Search: r.Search,
@@ -27,14 +30,60 @@ func Shape(result any, r Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.Raw {
-		return filtered, nil
-	}
 	normalized, err := asJSONValue(filtered)
 	if err != nil {
 		return nil, err
 	}
-	return StripMetadata(normalized), nil
+	reduced := DropMirroredContent(normalized)
+	if r.Raw {
+		return reduced, nil
+	}
+	return StripMetadata(reduced), nil
+}
+
+// DropMirroredContent removes a call-tool result's content array when every
+// part is the JSON serialization of structuredContent. MCP servers repeat the
+// structured payload as text for back-compat with clients that cannot read
+// structuredContent; for everyone else that repetition doubles the payload,
+// so the mapper keeps the structured copy and drops the mirrored text.
+// Results whose text differs from the structured payload (plain prose,
+// images, partial mirrors) pass through untouched.
+func DropMirroredContent(result any) any {
+	object, ok := result.(map[string]any)
+	if !ok {
+		return result
+	}
+	structured, present := object["structuredContent"]
+	if !present || structured == nil {
+		return result
+	}
+	parts, ok := object["content"].([]any)
+	if !ok || len(parts) == 0 {
+		return result
+	}
+	for _, part := range parts {
+		entry, ok := part.(map[string]any)
+		if !ok {
+			return result
+		}
+		text, ok := entry["text"].(string)
+		if !ok || !mirrorsStructured(text, structured) {
+			return result
+		}
+	}
+	delete(object, "content")
+	return object
+}
+
+// mirrorsStructured reports whether one text part decodes to the same value
+// as the result's structured content. A part that is not JSON, or that is a
+// different value, is independent data and must survive.
+func mirrorsStructured(text string, structured any) bool {
+	var parsed any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(parsed, structured)
 }
 
 // asJSONValue normalizes a result into the generic JSON shape the reducer

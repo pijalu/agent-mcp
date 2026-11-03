@@ -9,10 +9,13 @@ import (
 	"github.com/pijalu/agent-mcp/internal/output"
 )
 
-// textRenderer writes one command's payload for a human. A renderer must never
-// emit protocol bookkeeping (the dotted `_meta.` or `inputSchema.` paths of the
-// generic flatten): a human reads a name and a description, not a schema dump.
-type textRenderer func(w io.Writer, payload any) error
+// textRenderer writes one command's payload for a human. verbose marks the
+// --verbose request: the default rendering prints the result body, and the
+// envelope (analysis profile, limitations, transport fields) stays hidden. A
+// renderer must never emit protocol bookkeeping (the dotted `_meta.` or
+// `inputSchema.` paths of the generic flatten): a human reads a name and a
+// description, not a schema dump.
+type textRenderer func(w io.Writer, payload any, verbose bool) error
 
 // textRenderers maps a client command to its human renderer. A command without
 // an entry keeps the flattened key: value dump of output.WriteText, which
@@ -29,9 +32,9 @@ var textRenderers = map[string]textRenderer{
 
 // renderText renders a client command payload in the text format. Commands
 // without a human renderer fall back to the flattened key: value dump.
-func renderText(w io.Writer, command string, payload any) error {
+func renderText(w io.Writer, command string, payload any, verbose bool) error {
 	if render, ok := textRenderers[command]; ok {
-		return render(w, payload)
+		return render(w, payload, verbose)
 	}
 	return output.WriteText(w, payload)
 }
@@ -50,7 +53,7 @@ type fields func(item map[string]any) (string, string)
 // when the payload reports truncation or another page. key names the payload
 // array; describe extracts each item's name and description.
 func discoveryRenderer(key, noun string, describe fields) textRenderer {
-	return func(w io.Writer, payload any) error {
+	return func(w io.Writer, payload any, _ bool) error {
 		items, object := discoveryItems(payload, key)
 		if items == nil && object == nil {
 			return output.WriteText(w, payload)
@@ -171,11 +174,19 @@ func writeListFooter(w io.Writer, object map[string]any, noun string, shown int)
 }
 
 // renderCallTool prints a tool result's content text, marking non-text parts
-// instead of dumping their base64 data.
-func renderCallTool(w io.Writer, payload any) error {
+// instead of dumping their base64 data. An Evidence-shaped result (a
+// normalized_result body under structuredContent) prints the body only — the
+// analysis_profile and limitations envelope is boilerplate a human does not
+// read on every call — and --verbose restores the complete envelope.
+func renderCallTool(w io.Writer, payload any, verbose bool) error {
 	object, ok := payload.(map[string]any)
 	if !ok {
 		return output.WriteText(w, payload)
+	}
+	if !verbose {
+		if body := resultBody(object); body != nil {
+			return writeLine(w, prettyJSON(body))
+		}
 	}
 	lines := contentLines(asArray(object["content"]))
 	if len(lines) == 0 {
@@ -186,9 +197,23 @@ func renderCallTool(w io.Writer, payload any) error {
 	return writeLines(w, lines, "(no content)")
 }
 
+// resultBody extracts the normalized_result field of an Evidence-shaped
+// structured payload, returning nil for any other shape.
+func resultBody(object map[string]any) any {
+	structured, _ := object["structuredContent"].(map[string]any)
+	if structured == nil {
+		return nil
+	}
+	body, present := structured["normalized_result"]
+	if !present || body == nil {
+		return nil
+	}
+	return body
+}
+
 // renderReadResource prints the text of each resource content, marking binary
 // parts instead of dumping their base64 data.
-func renderReadResource(w io.Writer, payload any) error {
+func renderReadResource(w io.Writer, payload any, _ bool) error {
 	object, ok := payload.(map[string]any)
 	if !ok {
 		return output.WriteText(w, payload)
@@ -209,7 +234,7 @@ func renderReadResource(w io.Writer, payload any) error {
 }
 
 // renderGetPrompt prints each prompt message as its role and content text.
-func renderGetPrompt(w io.Writer, payload any) error {
+func renderGetPrompt(w io.Writer, payload any, _ bool) error {
 	object, ok := payload.(map[string]any)
 	if !ok {
 		return output.WriteText(w, payload)

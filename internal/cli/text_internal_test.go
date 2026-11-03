@@ -9,8 +9,15 @@ import (
 // rendered runs one command's text renderer and returns its output.
 func rendered(t *testing.T, command string, payload any) string {
 	t.Helper()
+	return renderedVerbose(t, command, payload, false)
+}
+
+// renderedVerbose runs one command's text renderer with an explicit verbose
+// flag and returns its output.
+func renderedVerbose(t *testing.T, command string, payload any, verbose bool) string {
+	t.Helper()
 	var buf bytes.Buffer
-	if err := renderText(&buf, command, payload); err != nil {
+	if err := renderText(&buf, command, payload, verbose); err != nil {
 		t.Fatalf("renderText(%s): %v", command, err)
 	}
 	return buf.String()
@@ -167,6 +174,47 @@ func TestRenderTextCallToolStructured(t *testing.T) {
 	out := rendered(t, "call-tool", payload)
 	if !strings.Contains(out, `"count": 2`) {
 		t.Errorf("structured output = %q", out)
+	}
+}
+
+// TestRenderTextCallToolEvidence pins the Evidence rendering: the
+// normalized_result body prints once, and the analysis_profile/limitations
+// envelope stays hidden — it is boilerplate a human does not read per call.
+func TestRenderTextCallToolEvidence(t *testing.T) {
+	payload := map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": `{"normalized_result":{"body":"x"}}`}},
+		"structuredContent": map[string]any{
+			"analysis_profile":  map[string]any{"provider": map[string]any{"id": "rea"}},
+			"limitations":       []any{"provider coverage is partial"},
+			"normalized_result": map[string]any{"body": "x"},
+		},
+	}
+	out := rendered(t, "call-tool", payload)
+	if !strings.Contains(out, `"body": "x"`) {
+		t.Errorf("evidence output = %q, want the normalized body", out)
+	}
+	for _, envelope := range []string{"analysis_profile", "limitations"} {
+		if strings.Contains(out, envelope) {
+			t.Errorf("evidence output leaks envelope field %q: %s", envelope, out)
+		}
+	}
+}
+
+// TestRenderTextCallToolEvidenceVerbose covers --verbose: the complete
+// envelope, analysis_profile and limitations included, comes back.
+func TestRenderTextCallToolEvidenceVerbose(t *testing.T) {
+	payload := map[string]any{
+		"structuredContent": map[string]any{
+			"analysis_profile":  map[string]any{"provider": map[string]any{"id": "rea"}},
+			"limitations":       []any{"provider coverage is partial"},
+			"normalized_result": map[string]any{"body": "x"},
+		},
+	}
+	out := renderedVerbose(t, "call-tool", payload, true)
+	for _, envelope := range []string{"analysis_profile", "limitations", `"body": "x"`} {
+		if !strings.Contains(out, envelope) {
+			t.Errorf("verbose output %q missing %q", out, envelope)
+		}
 	}
 }
 

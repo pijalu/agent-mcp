@@ -21,6 +21,7 @@ type GlobalFlags struct {
 	apiKey         string
 	noServer       bool
 	raw            bool
+	verbose        bool
 	callTimeout    time.Duration
 	connectTimeout time.Duration
 }
@@ -210,10 +211,11 @@ func execute(env *clientEnv, stdout io.Writer) (int, error) {
 
 // writeData renders v in the negotiated format to stdout. Text mode uses the
 // command's human renderer so a person sees names, descriptions, and content
-// text instead of a flattened protocol dump.
+// text instead of a flattened protocol dump. --verbose widens the text
+// rendering back to the complete envelope the payload carries.
 func (env *clientEnv) writeData(stdout io.Writer, v any) error {
 	if env.format == output.FormatText {
-		return renderText(stdout, env.name, v)
+		return renderText(stdout, env.name, v, env.global.verbose)
 	}
 	return output.WriteJSON(stdout, v)
 }

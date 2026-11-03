@@ -129,6 +129,7 @@ func bindGlobal(fs *flag.FlagSet, g *GlobalFlags) {
 	fs.StringVar(&g.apiKey, "api-key", "", "daemon API key")
 	fs.BoolVar(&g.noServer, "no-server", false, "run one-shot without the daemon")
 	fs.BoolVar(&g.raw, "raw", false, "write the full MCP result: no metadata stripping, no list totals")
+	fs.BoolVar(&g.verbose, "verbose", false, "print the complete tool result envelope in text format (default: the result body only)")
 	fs.DurationVar(&g.callTimeout, "call-timeout", 30*time.Second, "per-MCP-call timeout")
 	fs.DurationVar(&g.connectTimeout, "connect-timeout", defaultConnectTimeout, "daemon connect timeout")
 }
