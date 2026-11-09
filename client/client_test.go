@@ -552,6 +552,87 @@ func TestUpsertServerInvalidEntryRejected(t *testing.T) {
 	}
 }
 
+func TestClientReconnectsCachedDeadDaemonBeforeRequest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := &restartableRPC{}
+	second := &restartableRPC{}
+	dials := 0
+	c, err := New(Options{
+		ConfigPath:     path,
+		ConnectTimeout: time.Second,
+		CallTimeout:    time.Second,
+		Dial: func(context.Context, string) (pb.AgentMCPClient, io.Closer, error) {
+			dials++
+			if dials == 1 {
+				return first, &first.closer, nil
+			}
+			return second, &second.closer, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if _, err := c.Do(context.Background(), Request{Op: OpListTools, Server: "alpha"}); err != nil {
+		t.Fatalf("first Do: %v", err)
+	}
+	first.stale = true
+	if _, err := c.Do(context.Background(), Request{Op: OpListTools, Server: "alpha"}); err != nil {
+		t.Fatalf("Do after daemon restart: %v", err)
+	}
+	if dials != 2 {
+		t.Errorf("dial count = %d, want reconnect through a second dial", dials)
+	}
+	if !first.closer.closed {
+		t.Error("stale daemon connection was not closed")
+	}
+	if first.listCalls != 1 || second.listCalls != 1 {
+		t.Errorf("ListTools calls = first %d, second %d; want one on each daemon", first.listCalls, second.listCalls)
+	}
+}
+
+func TestClientReconnectsBeforeCallToolWithoutReplaying(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := &restartableRPC{}
+	second := &restartableRPC{}
+	dials := 0
+	c, err := New(Options{
+		ConfigPath:     path,
+		ConnectTimeout: time.Second,
+		CallTimeout:    time.Second,
+		Dial: func(context.Context, string) (pb.AgentMCPClient, io.Closer, error) {
+			dials++
+			if dials == 1 {
+				return first, &first.closer, nil
+			}
+			return second, &second.closer, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if _, err := c.Do(context.Background(), Request{Op: OpListTools, Server: "alpha"}); err != nil {
+		t.Fatalf("initial Do: %v", err)
+	}
+	first.stale = true
+	request := Request{Op: OpCallTool, Server: "alpha", Tool: "echo", Args: []byte(`{"text":"once"}`)}
+	if _, err := c.Do(context.Background(), request); err != nil {
+		t.Fatalf("CallTool after daemon restart: %v", err)
+	}
+	if first.callCalls != 0 || second.callCalls != 1 {
+		t.Errorf("CallTool calls = first %d, second %d; want no stale call and exactly one live call", first.callCalls, second.callCalls)
+	}
+}
+
 // --- test doubles ---
 
 type noopCloser struct{}
@@ -592,6 +673,46 @@ func downDialer() ProbeDial {
 	return func(context.Context, string) (pb.AgentMCPClient, io.Closer, error) {
 		return nil, nil, errors.New("down")
 	}
+}
+
+type recordingCloser struct{ closed bool }
+
+func (c *recordingCloser) Close() error {
+	c.closed = true
+	return nil
+}
+
+// restartableRPC simulates one daemon connection becoming stale after a
+// daemon restart. Requests on the stale connection must never reach a server.
+type restartableRPC struct {
+	pb.AgentMCPClient
+	closer    recordingCloser
+	stale     bool
+	listCalls int
+	callCalls int
+}
+
+func (s *restartableRPC) Status(context.Context, *pb.StatusRequest, ...grpc.CallOption) (*pb.StatusResponse, error) {
+	if s.stale {
+		return nil, status.Error(codes.Unavailable, "connection refused")
+	}
+	return &pb.StatusResponse{}, nil
+}
+
+func (s *restartableRPC) ListTools(context.Context, *pb.ListToolsRequest, ...grpc.CallOption) (*pb.ListToolsResponse, error) {
+	s.listCalls++
+	if s.stale {
+		return nil, status.Error(codes.Unavailable, "connection refused")
+	}
+	return &pb.ListToolsResponse{Json: []byte(`{"tools":[{"name":"echo"}]}`)}, nil
+}
+
+func (s *restartableRPC) CallTool(context.Context, *pb.CallToolRequest, ...grpc.CallOption) (*pb.CallToolResponse, error) {
+	s.callCalls++
+	if s.stale {
+		return nil, status.Error(codes.Unavailable, "connection refused")
+	}
+	return &pb.CallToolResponse{Json: []byte(`{"content":[{"type":"text","text":"once"}]}`)}, nil
 }
 
 // rpcStub answers Status and the discovery RPCs with canned payloads.

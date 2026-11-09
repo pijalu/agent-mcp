@@ -239,7 +239,18 @@ func (c *Client) connectDaemon() (pb.AgentMCPClient, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.rpc != nil {
-		return c.rpc, nil
+		// Validate a cached transport before invoking the request. Reconnecting
+		// here, rather than retrying a failed operation, guarantees that a
+		// non-idempotent MCP tool is never executed twice.
+		if _, err := c.reachable(c.rpc); err == nil {
+			return c.rpc, nil
+		} else if status.Code(err) != codes.Unavailable {
+			return nil, RPCFailure(err)
+		}
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
+		c.conn, c.rpc = nil, nil
 	}
 	addr := c.addr()
 	cl, closer, st, err := c.probeDaemon(addr)
