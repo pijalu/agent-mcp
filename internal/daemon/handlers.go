@@ -59,7 +59,7 @@ func rpcError(err error) error {
 	if status.Code(err) != codes.Unknown {
 		return err
 	}
-	if errors.Is(err, session.ErrUnknownServer) {
+	if errors.Is(err, session.ErrUnknownServer) || errors.Is(err, session.ErrUnsupportedCapability) {
 		return status.Error(codes.InvalidArgument, trimSessionPrefix(err.Error()))
 	}
 	return status.Error(codes.Internal, trimSessionPrefix(err.Error()))

@@ -29,6 +29,17 @@ func TestRPCErrorClassifiesUnknownServer(t *testing.T) {
 	}
 }
 
+func TestRPCErrorClassifiesUnsupportedCapability(t *testing.T) {
+	err := fmt.Errorf("%w: server %q does not support resources", session.ErrUnsupportedCapability, "chrome")
+	got := rpcError(err)
+	if code := status.Code(got); code != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", code)
+	}
+	if msg := status.Convert(got).Message(); !strings.Contains(msg, "does not support resources") {
+		t.Errorf("message = %q, want unsupported-capability detail", msg)
+	}
+}
+
 // TestRPCErrorDefaultsToInternal keeps unexpected failures internal.
 func TestRPCErrorDefaultsToInternal(t *testing.T) {
 	got := rpcError(errors.New("boom"))

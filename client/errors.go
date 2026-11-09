@@ -59,7 +59,7 @@ func RPCFailure(err error) error {
 // usage error class exactly as the daemon-mapped form does.
 func SessionFailure(err error) error {
 	msg := TrimSessionPrefix(err.Error())
-	if errors.Is(err, session.ErrUnknownServer) || IsUnknownTool(msg) {
+	if errors.Is(err, session.ErrUnknownServer) || errors.Is(err, session.ErrUnsupportedCapability) || IsUnknownTool(msg) {
 		return fmt.Errorf("%w: %s", ErrUsage, msg)
 	}
 	return fmt.Errorf("%w: %v", ErrMCP, err)

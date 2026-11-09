@@ -2,11 +2,16 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// ErrUnsupportedCapability marks a request for an optional MCP capability
+// that the connected server did not advertise during initialization.
+var ErrUnsupportedCapability = errors.New("session: unsupported capability")
 
 // call serializes fn against the session for name. Wrappers stay thin: all
 // params — including pagination cursors — pass through to the SDK verbatim.
@@ -83,6 +88,10 @@ func (m *Manager) ListTools(ctx context.Context, name string, params *mcp.ListTo
 func (m *Manager) ListResources(ctx context.Context, name string, params *mcp.ListResourcesParams) (*mcp.ListResourcesResult, error) {
 	var result *mcp.ListResourcesResult
 	err := m.call(ctx, name, func(s *mcp.ClientSession) error {
+		if !supportsCapability(s, func(c *mcp.ServerCapabilities) bool { return c.Resources != nil }) {
+			result = &mcp.ListResourcesResult{Resources: []*mcp.Resource{}}
+			return nil
+		}
 		var err error
 		result, err = s.ListResources(ctx, params)
 		return err
@@ -94,6 +103,9 @@ func (m *Manager) ListResources(ctx context.Context, name string, params *mcp.Li
 func (m *Manager) ReadResource(ctx context.Context, name string, params *mcp.ReadResourceParams) (*mcp.ReadResourceResult, error) {
 	var result *mcp.ReadResourceResult
 	err := m.call(ctx, name, func(s *mcp.ClientSession) error {
+		if !supportsCapability(s, func(c *mcp.ServerCapabilities) bool { return c.Resources != nil }) {
+			return unsupportedCapability(name, "resources")
+		}
 		var err error
 		result, err = s.ReadResource(ctx, params)
 		return err
@@ -105,6 +117,10 @@ func (m *Manager) ReadResource(ctx context.Context, name string, params *mcp.Rea
 func (m *Manager) ListPrompts(ctx context.Context, name string, params *mcp.ListPromptsParams) (*mcp.ListPromptsResult, error) {
 	var result *mcp.ListPromptsResult
 	err := m.call(ctx, name, func(s *mcp.ClientSession) error {
+		if !supportsCapability(s, func(c *mcp.ServerCapabilities) bool { return c.Prompts != nil }) {
+			result = &mcp.ListPromptsResult{Prompts: []*mcp.Prompt{}}
+			return nil
+		}
 		var err error
 		result, err = s.ListPrompts(ctx, params)
 		return err
@@ -116,9 +132,23 @@ func (m *Manager) ListPrompts(ctx context.Context, name string, params *mcp.List
 func (m *Manager) GetPrompt(ctx context.Context, name string, params *mcp.GetPromptParams) (*mcp.GetPromptResult, error) {
 	var result *mcp.GetPromptResult
 	err := m.call(ctx, name, func(s *mcp.ClientSession) error {
+		if !supportsCapability(s, func(c *mcp.ServerCapabilities) bool { return c.Prompts != nil }) {
+			return unsupportedCapability(name, "prompts")
+		}
 		var err error
 		result, err = s.GetPrompt(ctx, params)
 		return err
 	})
 	return result, err
+}
+
+// supportsCapability checks a negotiated optional capability without issuing
+// an RPC that a tools-only server is entitled to reject as unknown.
+func supportsCapability(s *mcp.ClientSession, advertised func(*mcp.ServerCapabilities) bool) bool {
+	initialized := s.InitializeResult()
+	return initialized != nil && initialized.Capabilities != nil && advertised(initialized.Capabilities)
+}
+
+func unsupportedCapability(server, capability string) error {
+	return fmt.Errorf("%w: server %q does not support %s", ErrUnsupportedCapability, server, capability)
 }

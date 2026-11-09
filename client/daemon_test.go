@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/pijalu/agent-mcp/internal/config"
+	"github.com/pijalu/agent-mcp/internal/session"
 	pb "github.com/pijalu/agent-mcp/proto/agentmcp/v1"
 )
 
@@ -202,6 +203,9 @@ func TestSessionFailureBranches(t *testing.T) {
 	}
 	if err := SessionFailure(errors.New("session: unknown tool \"z\"")); !errors.Is(err, ErrUsage) {
 		t.Errorf("unknown tool = %v, want ErrUsage", err)
+	}
+	if err := SessionFailure(fmt.Errorf("%w: server \"chrome\" does not support prompts", session.ErrUnsupportedCapability)); !errors.Is(err, ErrUsage) {
+		t.Errorf("unsupported capability = %v, want ErrUsage", err)
 	}
 	if err := SessionFailure(errors.New("dial refused")); !errors.Is(err, ErrMCP) {
 		t.Errorf("other = %v, want ErrMCP", err)

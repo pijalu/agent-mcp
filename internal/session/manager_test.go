@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -58,6 +59,35 @@ func fixtureDialer(t *testing.T) DialFunc {
 	return func(ctx context.Context, _ string, _ config.ServerConfig) (*mcp.ClientSession, error) {
 		_, clientTransport := newFixtureServer(t)
 		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
+		return client.Connect(ctx, clientTransport, nil)
+	}
+}
+
+func toolsOnlyDialer(t *testing.T) DialFunc {
+	t.Helper()
+	return func(ctx context.Context, _ string, _ config.ServerConfig) (*mcp.ClientSession, error) {
+		server := mcp.NewServer(&mcp.Implementation{Name: "tools-only", Version: "v1"}, nil)
+		// Match tools-only servers such as Chrome DevTools: unsupported methods
+		// are absent rather than implemented as empty SDK collections.
+		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				switch method {
+				case "resources/list", "resources/read", "prompts/list", "prompts/get":
+					return nil, errors.New("Method not found")
+				default:
+					return next(ctx, method, req)
+				}
+			}
+		})
+		mcp.AddTool(server, &mcp.Tool{Name: "echo"},
+			func(_ context.Context, _ *mcp.CallToolRequest, in echoArgs) (*mcp.CallToolResult, any, error) {
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: in.Text}}}, nil, nil
+			})
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
+			return nil, err
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v1"}, nil)
 		return client.Connect(ctx, clientTransport, nil)
 	}
 }
@@ -188,6 +218,42 @@ func TestManagerPrompts(t *testing.T) {
 	}
 	if got := prompt.Messages[0].Content.(*mcp.TextContent).Text; got != "hello agent" {
 		t.Errorf("prompt message = %q, want %q", got, "hello agent")
+	}
+}
+
+func TestManagerUnsupportedOptionalDiscoveryIsEmpty(t *testing.T) {
+	m := NewManager(testConfigs(), toolsOnlyDialer(t))
+	resources, err := m.ListResources(context.Background(), "alpha", &mcp.ListResourcesParams{})
+	if err != nil {
+		t.Fatalf("ListResources on tools-only server: %v", err)
+	}
+	if resources == nil || len(resources.Resources) != 0 {
+		t.Errorf("ListResources = %+v, want empty result", resources)
+	}
+	prompts, err := m.ListPrompts(context.Background(), "alpha", &mcp.ListPromptsParams{})
+	if err != nil {
+		t.Fatalf("ListPrompts on tools-only server: %v", err)
+	}
+	if prompts == nil || len(prompts.Prompts) != 0 {
+		t.Errorf("ListPrompts = %+v, want empty result", prompts)
+	}
+}
+
+func TestManagerUnsupportedOptionalOperationsAreClear(t *testing.T) {
+	m := NewManager(testConfigs(), toolsOnlyDialer(t))
+	_, err := m.ReadResource(context.Background(), "alpha", &mcp.ReadResourceParams{URI: "mem://missing"})
+	if err == nil || !strings.Contains(err.Error(), `server "alpha" does not support resources`) {
+		t.Errorf("ReadResource error = %v, want explicit unsupported resources", err)
+	}
+	if !errors.Is(err, ErrUnsupportedCapability) {
+		t.Errorf("ReadResource error = %v, want ErrUnsupportedCapability", err)
+	}
+	_, err = m.GetPrompt(context.Background(), "alpha", &mcp.GetPromptParams{Name: "missing"})
+	if err == nil || !strings.Contains(err.Error(), `server "alpha" does not support prompts`) {
+		t.Errorf("GetPrompt error = %v, want explicit unsupported prompts", err)
+	}
+	if !errors.Is(err, ErrUnsupportedCapability) {
+		t.Errorf("GetPrompt error = %v, want ErrUnsupportedCapability", err)
 	}
 }
 
