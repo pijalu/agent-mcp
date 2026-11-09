@@ -177,6 +177,12 @@ func AutoStartNotice(addr string) string {
 	return fmt.Sprintf("daemon not reachable at %s; auto-starting one (it stays up after this command; stop it with `agent-mcp server shutdown`)\n", addr)
 }
 
+// EmbeddedAutoStartNotice is AutoStartNotice without a dependency on the
+// agent-mcp CLI. Embedders select it through Options.AutoStartNotice.
+func EmbeddedAutoStartNotice(addr string) string {
+	return fmt.Sprintf("daemon not reachable at %s; auto-starting embedded daemon (it stays up after this command; use the host's daemon shutdown action to stop it)\n", addr)
+}
+
 // TransportReason flattens the wrapper gRPC puts around transport failures
 // (`code: desc = "..."`) down to the cause, so an unreachable address stays
 // diagnosable without a gRPC status dump in the envelope.
@@ -274,34 +280,38 @@ func exitCode(err error) int {
 	return -1
 }
 
-// SpawnDaemon re-executes this binary as a detached daemon and returns a
-// handle once the child is spawned (readiness is polled by the caller). The
-// child inherits the options' config, listen address, and API key.
+// SpawnDaemon re-executes this binary with agent-mcp's own `server start`
+// command. Embedders whose host exposes the daemon under another command use
+// SpawnDaemonWithCommand instead.
 func SpawnDaemon(o Options) (DaemonChild, error) {
-	self, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("cli: locate executable: %w", err)
+	return SpawnDaemonWithCommand(o, "", "server", "start")
+}
+
+// SpawnDaemonWithCommand starts a detached daemon through the host binary's
+// command. An empty executable means os.Executable. The daemon flags are added
+// after command, so an embedder only supplies its subcommand path.
+func SpawnDaemonWithCommand(o Options, executable string, command ...string) (DaemonChild, error) {
+	self := executable
+	if self == "" {
+		var err error
+		self, err = os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("cli: locate executable: %w", err)
+		}
+	}
+	if len(command) == 0 {
+		return nil, fmt.Errorf("cli: daemon command is required")
 	}
 	// Guard: re-executing a test binary re-runs the whole suite per spawn
 	// (fork bomb). Tests must inject Options.SpawnDaemon instead.
 	if strings.HasSuffix(self, ".test") || strings.HasSuffix(self, ".test.exe") {
 		return nil, fmt.Errorf("cli: refusing to auto-start daemon from test binary %q", self)
 	}
-	args := []string{"server", "start", "--server-idle-time", "5m"}
-	if o.ConfigPath != "" {
-		args = append(args, "--config", o.ConfigPath)
-	}
-	if o.ConnectAddr != "" {
-		args = append(args, "--listen", o.ConnectAddr)
-	}
-	if o.APIKey != "" {
-		args = append(args, "--api-key", o.APIKey)
-	}
 	log, err := os.CreateTemp("", "agent-mcp-daemon-*.log")
 	if err != nil {
 		return nil, fmt.Errorf("cli: capture daemon output: %w", err)
 	}
-	cmd := exec.Command(self, args...)
+	cmd := exec.Command(self, daemonArgs(o, command)...)
 	// Detach: the daemon shares no terminal. Its stdout/stderr go to the temp
 	// file so a daemon that dies during startup can report its real error.
 	cmd.Stdout = log
@@ -317,4 +327,20 @@ func SpawnDaemon(o Options) (DaemonChild, error) {
 	child := &childProcess{cmd: cmd, logPath: log.Name()}
 	go child.watch()
 	return child, nil
+}
+
+// daemonArgs combines an embedder's subcommand with the common daemon flags.
+func daemonArgs(o Options, command []string) []string {
+	args := append([]string(nil), command...)
+	args = append(args, "--server-idle-time", "5m")
+	if o.ConfigPath != "" {
+		args = append(args, "--config", o.ConfigPath)
+	}
+	if o.ConnectAddr != "" {
+		args = append(args, "--listen", o.ConnectAddr)
+	}
+	if o.APIKey != "" {
+		args = append(args, "--api-key", o.APIKey)
+	}
+	return args
 }

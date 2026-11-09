@@ -364,6 +364,37 @@ func TestClientAutoStartFlow(t *testing.T) {
 	}
 }
 
+func TestClientAutoStartRechecksDaemonReadiness(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{
+		ConfigPath:     path,
+		ConnectAddr:    listener.Addr().String(),
+		ConnectTimeout: 200 * time.Millisecond,
+		SpawnDaemon: func(Options) (DaemonChild, error) {
+			return &stubChild{exited: true, code: 1, out: "server: listen: address already in use"}, nil
+		},
+		Dial: func(context.Context, string) (pb.AgentMCPClient, io.Closer, error) {
+			return &failStub{}, noopCloser{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, err = c.Do(context.Background(), Request{Op: OpListTools, Server: "alpha"})
+	if err == nil || !strings.Contains(err.Error(), "address already in use") {
+		t.Fatalf("Do error = %v, want child startup diagnostic", err)
+	}
+}
+
 func TestClientAutoStartSpawnFailureMapsToInternal(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

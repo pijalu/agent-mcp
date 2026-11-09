@@ -50,6 +50,9 @@ type Options struct {
 	DaemonOnly bool
 	// Stderr receives the auto-start notice; nil means io.Discard.
 	Stderr io.Writer
+	// AutoStartNotice overrides the auto-start hint for embedding hosts.
+	// Nil preserves the agent-mcp CLI's shutdown instructions.
+	AutoStartNotice func(addr string) string
 
 	// SpawnDaemon starts a detached daemon; default SpawnDaemon. Tests
 	// inject a fake to avoid real processes.
@@ -84,6 +87,9 @@ func New(o Options) (*Client, error) {
 	}
 	if o.SpawnDaemon == nil {
 		o.SpawnDaemon = SpawnDaemon
+	}
+	if o.AutoStartNotice == nil {
+		o.AutoStartNotice = AutoStartNotice
 	}
 	if o.Dial == nil {
 		o.Dial = GRPCDial
@@ -252,7 +258,7 @@ func (c *Client) connectDaemon() (pb.AgentMCPClient, error) {
 		return nil, fmt.Errorf("%w: daemon at %s unreachable (%v); this operation requires a running daemon, start one with `agent-mcp server start`",
 			ErrMCP, addr, err)
 	}
-	fmt.Fprint(c.opts.Stderr, AutoStartNotice(addr))
+	fmt.Fprint(c.opts.Stderr, c.opts.AutoStartNotice(addr))
 	child, err := c.opts.SpawnDaemon(c.opts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: auto-start daemon: %v", ErrInternal, err)
@@ -267,8 +273,26 @@ func (c *Client) connectDaemon() (pb.AgentMCPClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: dial daemon at %s: %v", ErrMCP, addr, err)
 	}
+	if err := c.validateStartedDaemon(cl, child, addr); err != nil {
+		_ = closer.Close()
+		return nil, err
+	}
 	c.conn, c.rpc = closer, cl
 	return cl, nil
+}
+
+// validateStartedDaemon confirms a gRPC daemon, not merely an open TCP port.
+// If the child lost the listen race, its own diagnostic is more useful than
+// the transport error from the unrelated process occupying the port.
+func (c *Client) validateStartedDaemon(cl pb.AgentMCPClient, child DaemonChild, addr string) error {
+	st, err := c.reachable(cl)
+	if err != nil {
+		if code, exited := childStatus(child); exited {
+			return DaemonStartupError(addr, code, child.Output())
+		}
+		return fmt.Errorf("%w: daemon at %s did not become ready: %v", ErrMCP, addr, err)
+	}
+	return CheckConfigMatch(st, addr, ResolveConfigPath(c.opts.ConfigPath))
 }
 
 // probeDaemon dials addr and asks the daemon behind it for its status. A

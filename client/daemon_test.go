@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -341,29 +342,30 @@ func TestSpawnDaemonRefusesTestBinary(t *testing.T) {
 	}
 }
 
-func TestSpawnDaemonArgsParity(t *testing.T) {
-	// Argument construction is exercised through StartFailureProbe: the
-	// command is built but never started. Reach into spawnArgs indirectly:
-	// a full Options maps to the documented CLI flags.
-	if spawnArgsFor(Options{ConfigPath: "c.toml", ConnectAddr: "h:1", APIKey: "k"})[0] != "server" {
-		t.Error("first arg must be the server subcommand")
+func TestDaemonArgs(t *testing.T) {
+	o := Options{ConfigPath: "c.toml", ConnectAddr: "h:1", APIKey: "k"}
+	wantFlags := []string{"--server-idle-time", "5m", "--config", "c.toml", "--listen", "h:1", "--api-key", "k"}
+	for _, tc := range []struct {
+		name    string
+		command []string
+	}{
+		{name: "agent-mcp CLI default", command: []string{"server", "start"}},
+		{name: "Goa embedded daemon", command: []string{"mcp", "daemon"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := append(append([]string(nil), tc.command...), wantFlags...)
+			if got := daemonArgs(o, tc.command); !reflect.DeepEqual(got, want) {
+				t.Fatalf("daemonArgs() = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
-// spawnArgsFor mirrors SpawnDaemon's argument list; kept next to the test so
-// parity drift is caught here, not in production.
-func spawnArgsFor(o Options) []string {
-	args := []string{"server", "start", "--server-idle-time", "5m"}
-	if o.ConfigPath != "" {
-		args = append(args, "--config", o.ConfigPath)
+func TestSpawnDaemonWithCommandRequiresExecutable(t *testing.T) {
+	_, err := SpawnDaemonWithCommand(Options{}, filepath.Join(t.TempDir(), "missing"), "mcp", "daemon")
+	if err == nil || !strings.Contains(err.Error(), "spawn daemon") {
+		t.Fatalf("SpawnDaemonWithCommand() error = %v, want spawn failure", err)
 	}
-	if o.ConnectAddr != "" {
-		args = append(args, "--listen", o.ConnectAddr)
-	}
-	if o.APIKey != "" {
-		args = append(args, "--api-key", o.APIKey)
-	}
-	return args
 }
 
 // --- ShutdownDaemon ---
