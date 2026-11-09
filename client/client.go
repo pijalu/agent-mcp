@@ -269,6 +269,12 @@ func (c *Client) connectDaemon() (pb.AgentMCPClient, error) {
 		return nil, fmt.Errorf("%w: daemon at %s unreachable (%v); this operation requires a running daemon, start one with `agent-mcp server start`",
 			ErrMCP, addr, err)
 	}
+	return c.startDaemon(addr)
+}
+
+// startDaemon launches the configured daemon command and validates the new
+// transport before caching it. The caller holds c.mu.
+func (c *Client) startDaemon(addr string) (pb.AgentMCPClient, error) {
 	fmt.Fprint(c.opts.Stderr, c.opts.AutoStartNotice(addr))
 	child, err := c.opts.SpawnDaemon(c.opts)
 	if err != nil {
@@ -280,7 +286,7 @@ func (c *Client) connectDaemon() (pb.AgentMCPClient, error) {
 	}
 	dialCtx, cancel := context.WithTimeout(context.Background(), c.connectTimeoutValue())
 	defer cancel()
-	cl, closer, err = c.opts.Dial(dialCtx, addr)
+	cl, closer, err := c.opts.Dial(dialCtx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("%w: dial daemon at %s: %v", ErrMCP, addr, err)
 	}
