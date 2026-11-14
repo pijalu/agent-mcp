@@ -55,6 +55,32 @@ Requires:
 
 Optional `--args JSON` must be a JSON object.
 
+The binary-content flags below also apply to `read-resource`.
+
+## Binary content (`--binaries-policy`, `--save-binaries`)
+
+Tools like screenshot or file readers return binary payloads (images, audio,
+PDFs) as base64 inline. `call-tool` and `read-resource` rewrite those payloads
+according to `--binaries-policy POLICY`:
+
+- `file` (default): decodes the payload, writes it to disk, and replaces the
+  payload with a pointer marker: `[binary: image/png → /path/part-01.png (7 B)]`.
+  Without `--save-binaries DIR`, artifacts go to a fresh temporary directory
+  (`agent-mcp-binaries-*`); directories older than 24h are removed on the next
+  run.
+- `dataurl`: keeps the payload inline as a `data:<mime>;base64,…` URL. Text
+  output summarizes it (`[binary: image/png dataurl (7 B)]`) — the URL itself is
+  never printed.
+- `strip`: replaces the payload with `[binary: <mime> stripped]`.
+- `keep`: leaves the payload byte-for-byte unchanged (the library default;
+  text output still shows only `[image: <mime>]`).
+
+`--save-binaries DIR` chooses the directory the `file` policy writes to
+(created on demand). Applies to `--raw` too: the policy is a caller-directed
+content transform, not payload shaping. If a payload cannot be decoded or
+stored, the part degrades to `[binary: <mime> undecodable: …]` /
+`[binary: <mime> not saved: …]` and the rest of the result stays usable.
+
 ## list-resources
 
 Requires `--server NAME`.
@@ -72,6 +98,8 @@ Requires:
 
 - `--server NAME`
 - `--uri URI`.
+
+Read-resource accepts the same binary-content flags as call-tool (`--binaries-policy`, `--save-binaries`); see "Binary content" above. Resource blobs follow the identical policy and markers.
 
 ## list-prompts
 

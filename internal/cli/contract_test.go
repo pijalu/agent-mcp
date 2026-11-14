@@ -128,7 +128,7 @@ func TestRawRestoresFullMCPResult(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (out %s)", code, out)
 	}
-	const want = `{"version":1,"data":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"fixture","version":"0.0.1"}},"cacheScope":"public","resultType":"complete","tools":[{"description":"echoes text","inputSchema":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"echo"}],"ttlMs":0}}` + "\n"
+	const want = `{"version":1,"data":{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"fixture","version":"0.0.1"}},"cacheScope":"public","resultType":"complete","tools":[{"description":"echoes text","inputSchema":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"echo"},{"description":"returns a png part","inputSchema":{"additionalProperties":false,"type":"object"},"name":"shot"}],"ttlMs":0}}` + "\n"
 	if out != want {
 		t.Errorf("--raw payload changed\n got: %s\nwant: %s", out, want)
 	}
@@ -142,7 +142,7 @@ func TestDefaultListToolsPayloadIsPinned(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (out %s)", code, out)
 	}
-	const want = `{"version":1,"data":{"tools":[{"description":"echoes text","inputSchema":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"echo"}],"total":1}}` + "\n"
+	const want = `{"version":1,"data":{"tools":[{"description":"echoes text","inputSchema":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":"echo"},{"description":"returns a png part","inputSchema":{"additionalProperties":false,"type":"object"},"name":"shot"}],"total":2}}` + "\n"
 	if out != want {
 		t.Errorf("default payload changed\n got: %s\nwant: %s", out, want)
 	}

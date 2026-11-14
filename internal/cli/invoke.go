@@ -42,6 +42,10 @@ func (env *clientEnv) request() client.Request {
 		Limit:  env.params.limit,
 		Raw:    env.global.raw,
 	}
+	// The binary policy is the library's decision path (Shape applies it);
+	// the CLI only carries the user's choice and the file store.
+	req.Binaries = env.binaries.policy
+	req.BinaryStore = env.binaries.store
 	if env.params.args != "" {
 		req.Args = json.RawMessage(env.params.args)
 	}

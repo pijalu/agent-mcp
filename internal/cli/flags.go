@@ -13,14 +13,16 @@ import (
 
 // commandParams holds the parsed per-command flags.
 type commandParams struct {
-	server string
-	cursor string
-	tool   string
-	uri    string
-	prompt string
-	args   string
-	search string
-	limit  int
+	server         string
+	cursor         string
+	tool           string
+	uri            string
+	prompt         string
+	args           string
+	search         string
+	limit          int
+	binariesPolicy string
+	saveBinaries   string
 }
 
 // commandSpec describes one client-mode subcommand: bind registers the
@@ -160,12 +162,25 @@ func bindCallTool(fs *flag.FlagSet, p *commandParams) {
 	fs.StringVar(&p.server, "server", "", "server name")
 	fs.StringVar(&p.tool, "tool", "", "tool name")
 	fs.StringVar(&p.args, "args", "", "tool arguments as JSON")
+	bindBinaries(fs, p)
 }
 
 // bindReadResource registers read-resource flags.
 func bindReadResource(fs *flag.FlagSet, p *commandParams) {
 	fs.StringVar(&p.server, "server", "", "server name")
 	fs.StringVar(&p.uri, "uri", "", "resource URI")
+	bindBinaries(fs, p)
+}
+
+// bindBinaries registers the shared binary-content flags. The default policy
+// is file: a screenshot-style result arrives as a one-line pointer marker
+// plus a file the calling harness attaches natively, instead of megabytes of
+// base64 a terminal cannot show.
+func bindBinaries(fs *flag.FlagSet, p *commandParams) {
+	fs.StringVar(&p.binariesPolicy, "binaries-policy", "file",
+		"binary content handling: file|dataurl|strip|keep")
+	fs.StringVar(&p.saveBinaries, "save-binaries", "",
+		"directory for binary artifacts (file policy; default: fresh temp dir, swept after 24h)")
 }
 
 // bindGetPrompt registers get-prompt flags.

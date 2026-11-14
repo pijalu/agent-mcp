@@ -51,11 +51,23 @@ type Request struct {
 	// Raw keeps the MCP result as the server returned it: no metadata
 	// stripping, no list totals.
 	Raw bool
+	// Binaries selects what Shape does with non-text base64 content parts
+	// (images, audio, resource blobs). Empty/keep ships raw base64
+	// (back-compat); dataurl, file, and strip are the model- and
+	// context-friendly forms. See BinaryPolicy.
+	Binaries BinaryPolicy
+	// BinaryStore persists decoded parts for BinariesFile and returns their
+	// location for the pointer marker. Required for the file policy; the
+	// other policies ignore it.
+	BinaryStore BinaryStore
 }
 
 // Validate checks the required fields of r.Op with the CLI's exact wording,
 // so a library caller sees the same usage failures a script would.
 func (r Request) Validate() error {
+	if err := r.validateBinaries(); err != nil {
+		return err
+	}
 	switch r.Op {
 	case OpListServers:
 		return nil
@@ -81,6 +93,21 @@ func (r Request) Validate() error {
 	default:
 		return fmt.Errorf("%w: unknown operation %q", ErrUsage, string(r.Op))
 	}
+}
+
+// validateBinaries checks the binary policy fields: the policy name must
+// parse, and the file policy needs a store to write artifacts into.
+func (r Request) validateBinaries() error {
+	if r.Binaries == "" {
+		return nil
+	}
+	if _, err := ParseBinaryPolicy(string(r.Binaries)); err != nil {
+		return err
+	}
+	if r.Binaries == BinariesFile && r.BinaryStore == nil {
+		return fmt.Errorf("%w: binaries=file requires BinaryStore", ErrUsage)
+	}
+	return nil
 }
 
 // isList reports whether the operation returns a discovery list that the

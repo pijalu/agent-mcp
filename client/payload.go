@@ -35,10 +35,17 @@ func Shape(result any, r Request) (any, error) {
 		return nil, err
 	}
 	reduced := DropMirroredContent(normalized)
-	if r.Raw {
-		return reduced, nil
+	if !r.Raw {
+		reduced = StripMetadata(reduced)
 	}
-	return StripMetadata(reduced), nil
+	// The binary policy is a caller-directed content transformation, not
+	// transport bookkeeping, so it applies to raw and reduced payloads
+	// alike: a caller that asks for artifacts wants them regardless of
+	// --raw. keep (the default) leaves every byte as the server sent it.
+	if _, err := ApplyBinariesPolicy(reduced, r.Binaries, r.BinaryStore); err != nil {
+		return nil, err
+	}
+	return reduced, nil
 }
 
 // DropMirroredContent removes a call-tool result's content array when every

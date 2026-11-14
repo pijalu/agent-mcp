@@ -71,6 +71,34 @@ filter and stays available for the next page.
 unknown tool reports the tools the server exposes. Both are best-effort hints appended
 to the message.
 
+### Binary Content Policy
+
+MCP tools that return binary payloads (screenshots, audio, PDFs) ship them inline as
+base64, which floods the agent's context and is unreadable there. `call-tool` and
+`read-resource` apply a caller-directed **binary policy** to every binary carrier in
+the result — content parts (`type: image|audio`), embedded resource parts, and
+`read-resource` resource contents (any `data`/`blob` + `mimeType` pair):
+
+| Policy | Effect | Payload becomes |
+|---|---|---|
+| `file` | decode → write to disk | pointer marker `[binary: <mime> → <path> (<size>)]` |
+| `dataurl` | inline data URL | `data:<mime>;base64,…` (text output summarizes size, never prints the URL) |
+| `strip` | drop the payload | `[binary: <mime> stripped]` |
+| `keep` | unchanged | original base64 (the library default; back-compat) |
+
+The CLI defaults to `file` with `--save-binaries DIR`; without a directory it writes
+to a fresh `agent-mcp-binaries-*` temp dir per invocation and removes `agent-mcp-binaries-*`
+directories older than 24h on the next run, so artifacts outlive the short-lived CLI
+process without leaking forever. The library (`client.Shape`) defaults to `keep` —
+programmatic callers opt in per request via `Request{Binaries, BinaryStore}` where
+`BinaryStore` is a one-method interface the caller implements (the library never
+touches the filesystem).
+
+The policy applies to `--raw` payloads too: it is a caller-directed content transform,
+not payload shaping. A payload that cannot be decoded or stored degrades to an inline
+error marker (`[binary: <mime> undecodable: …]` / `[binary: <mime> not saved: …]`);
+the rest of the result stays usable and the invocation does not fail.
+
 ### Pagination
 
 `list-*` commands expose MCP cursors verbatim via `--cursor` and return `nextCursor` in the JSON payload. Agents must treat an empty `nextCursor` as end-of-list. The CLI never auto-paginates silently: `--search`/`--limit` apply to the current page only, and the payload reports `total` plus `truncated` so dropped matches are visible.

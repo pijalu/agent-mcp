@@ -171,6 +171,10 @@ type clientEnv struct {
 	deps       Deps
 	daemonOnly bool // command requires a daemon the caller already runs
 	local      bool // command reads the config directly and never uses a daemon
+	// binaries is the resolved binary-content policy/store, prepared once
+	// per invocation before any request is built (nil for commands without
+	// binary flags).
+	binaries binaryEnv
 }
 
 // parseClient validates the command name, flags, and required arguments.
@@ -195,6 +199,11 @@ func runClientCommand(deps Deps, env *clientEnv, stdout, stderr io.Writer) (int,
 	env.format = format
 	env.stderr = stderr
 	env.deps = deps
+	if env.params.binariesPolicy != "" || env.params.saveBinaries != "" {
+		if err := env.prepareBinaries(); err != nil {
+			return output.ExitCode(err), err
+		}
+	}
 	return execute(env, stdout)
 }
 

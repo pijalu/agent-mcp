@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/pijalu/agent-mcp/client"
 	"github.com/pijalu/agent-mcp/internal/output"
 )
 
@@ -225,12 +226,32 @@ func renderReadResource(w io.Writer, payload any, _ bool) error {
 			continue
 		}
 		if text := stringValue(entry, "text"); text != "" {
-			lines = append(lines, text)
+			lines = append(lines, resourceTextLine(entry, text))
+			continue
+		}
+		if blob, ok := entry["blob"].(string); ok && strings.HasPrefix(blob, "data:") {
+			lines = append(lines, dataURLSummary(stringValue(entry, "mimeType"), blob))
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("[binary %s: %s]", stringValue(entry, "mimeType"), stringValue(entry, "uri")))
 	}
 	return writeLines(w, lines, "(no contents)")
+}
+
+// dataURLSummary renders the one-line marker for an inline data: URL:
+// printing the URL itself would be the same context bomb the policy exists
+// to prevent, so text output keeps a mime + size summary.
+func dataURLSummary(mimeType, payload string) string {
+	return fmt.Sprintf("[binary: %s dataurl (%s)]", mimeType, client.HumanSize(dataURLSize(payload)))
+}
+
+// resourceTextLine renders one resource content's text, collapsing inline
+// data: URLs (the dataurl policy applied to a blob) to a summary marker.
+func resourceTextLine(entry map[string]any, text string) string {
+	if strings.HasPrefix(text, "data:") {
+		return dataURLSummary(stringValue(entry, "mimeType"), text)
+	}
+	return text
 }
 
 // renderGetPrompt prints each prompt message as its role and content text.
@@ -271,17 +292,17 @@ func contentLines(items []any) []string {
 	return lines
 }
 
-// contentLine renders one MCP content item.
+// contentLine renders one MCP content item: text verbatim, binary payloads
+// as one-line markers (the policy layer already rewrote stored parts to
+// text), and a bracketed fallback for anything else a terminal cannot show.
 func contentLine(entry map[string]any) string {
 	contentType := stringValue(entry, "type")
 	if text := stringValue(entry, "text"); text != "" {
 		return text
 	}
 	switch contentType {
-	case "image":
-		return fmt.Sprintf("[image: %s]", stringValue(entry, "mimeType"))
-	case "audio":
-		return fmt.Sprintf("[audio: %s]", stringValue(entry, "mimeType"))
+	case "image", "audio":
+		return inlineBinaryLine(entry, contentType)
 	case "resource":
 		resource, _ := entry["resource"].(map[string]any)
 		if text := stringValue(resource, "text"); text != "" {
@@ -295,6 +316,17 @@ func contentLine(entry map[string]any) string {
 		return fmt.Sprintf("[%s: %s]", contentType, uri)
 	}
 	return fmt.Sprintf("[%s]", contentType)
+}
+
+// inlineBinaryLine renders an image/audio part that still carries its
+// payload inline (keep or dataurl policy): the data-URL form gets a size so
+// the line stays a summary, the raw form keeps its legacy marker.
+func inlineBinaryLine(entry map[string]any, contentType string) string {
+	mimeType := stringValue(entry, "mimeType")
+	if data, ok := entry["data"].(string); ok && strings.HasPrefix(data, "data:") {
+		return dataURLSummary(mimeType, data)
+	}
+	return fmt.Sprintf("[%s: %s]", contentType, mimeType)
 }
 
 // writeLines writes lines, or fallback when there are none.
